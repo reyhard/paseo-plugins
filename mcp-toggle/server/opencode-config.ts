@@ -1,10 +1,9 @@
-import { execCommand } from "@getpaseo/plugin/server";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Mcp } from "../shared/rpc";
 import { paseoHome, projectKey } from "./claude-config";
-import { locateCli } from "./cli";
+import { readOpenCodeConfig } from "./opencode-files";
 
 type ObjectMap = Record<string, unknown>;
 type ServerMap = Record<string, ObjectMap>;
@@ -15,8 +14,11 @@ const entries = (v: unknown): ServerMap =>
 export function configuredServers(config: ObjectMap): { mode: "v1" | "v2"; servers: ServerMap } {
   const mcp = isObject(config.mcp) ? config.mcp : {};
   // OpenCode V2 uses mcp.servers; OpenCode V1 stores servers directly in mcp.
-  if (isObject(mcp.servers)) return { mode: "v2", servers: entries(mcp.servers) };
-  return { mode: "v1", servers: entries(mcp) };
+  const legacy = entries(mcp);
+  delete legacy.servers;
+  delete legacy.timeout;
+  if (isObject(mcp.servers)) return { mode: "v2", servers: { ...legacy, ...entries(mcp.servers) } };
+  return { mode: "v1", servers: legacy };
 }
 
 export function effectiveEnabled(mode: "v1" | "v2", server: ObjectMap): boolean {
@@ -47,13 +49,7 @@ export function mergeContent(original: ObjectMap, overlay: ObjectMap): ObjectMap
 }
 
 async function configFor(cwd: string): Promise<ObjectMap> {
-  const cli = await locateCli("opencode");
-  const { stdout } = await execCommand(cli, ["debug", "config"], {
-    cwd, timeout: 12_000, maxBuffer: 5 * 1024 * 1024,
-  });
-  const parsed: unknown = JSON.parse(stdout);
-  if (!isObject(parsed)) throw new Error("OpenCode debug config did not return a JSON object");
-  return parsed;
+  return readOpenCodeConfig(cwd);
 }
 
 function statePath(key: string): string {

@@ -1,0 +1,12 @@
+{
+  "id": "mcp-toggle",
+  "name": "MCP toggle",
+  "description": "Manage Claude, Codex and OpenCode MCP servers per project, with a settings screen, composer pill and Windows fixes.",
+  "media": [
+    "assets/manage-servers.png",
+    "assets/composer-pill.png"
+  ],
+  "requirements": {
+    "paseo": ">=0.13.0"
+  }
+}

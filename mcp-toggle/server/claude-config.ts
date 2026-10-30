@@ -145,7 +145,7 @@ export async function reloadAgent(agentId: string): Promise<void> {
 }
 
 async function findCli(): Promise<string> {
-  const bundle = process.execPath.match(/^(.*?\\.app\\/Contents)\\//)?.[1];
+  const bundle = process.execPath.match(/^(.*?\.app\/Contents)\//)?.[1];
   return locateCli("paseo", [
     bundle ? join(bundle, "Resources", "bin") : "",
     "/Applications/Paseo.app/Contents/Resources/bin",

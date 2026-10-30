@@ -1,10 +1,9 @@
-import { execCommand } from "@getpaseo/plugin/server";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import type { Mcp } from "../shared/rpc";
 import { paseoHome, projectKey } from "./claude-config";
-import { locateCli } from "./cli";
 
 type ObjectMap = Record<string, unknown>;
 type ServerMap = Record<string, ObjectMap>;
@@ -46,14 +45,74 @@ export function mergeContent(original: ObjectMap, overlay: ObjectMap): ObjectMap
   return { ...original, mcp: { ...before, ...extra } };
 }
 
-async function configFor(cwd: string): Promise<ObjectMap> {
-  const cli = await locateCli("opencode");
-  const { stdout } = await execCommand(cli, ["debug", "config"], {
-    cwd, timeout: 12_000, maxBuffer: 5 * 1024 * 1024,
-  });
-  const parsed: unknown = JSON.parse(stdout);
-  if (!isObject(parsed)) throw new Error("OpenCode debug config did not return a JSON object");
-  return parsed;
+/** Read OpenCode configuration files instead of the redacted debug CLI output. */
+export async function configFor(cwd: string): Promise<ObjectMap> {
+  const home = homedir();
+  const globalDir = process.env.OPENCODE_CONFIG_DIR ||
+    join(process.env.XDG_CONFIG_HOME || join(home, ".config"), "opencode");
+  const folders: string[] = [];
+  let folder = resolve(cwd);
+  while (true) {
+    folders.unshift(folder);
+    const parent = dirname(folder);
+    if (parent === folder) break;
+    folder = parent;
+  }
+  const locations = [globalDir, ...folders, ...folders.map((p) => join(p, ".opencode"))];
+  const result: ObjectMap = {};
+  let found = 0;
+  for (const location of locations) {
+    for (const filename of ["opencode.json", "opencode.jsonc"]) {
+      const file = join(location, filename);
+      let raw: string;
+      try { raw = await readFile(file, "utf8"); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      let parsed: unknown;
+      try { parsed = JSON.parse(removeJsonc(raw)); }
+      catch (error) { throw new Error(`Invalid OpenCode config ${file}: ${String(error)}`); }
+      if (!isObject(parsed)) throw new Error(`OpenCode config is not an object: ${file}`);
+      found++;
+      const mcp = isObject(parsed.mcp) ? parsed.mcp : {};
+      const old = isObject(result.mcp) ? result.mcp : {};
+      const oldServers = isObject(old.servers) ? old.servers : {};
+      const servers = isObject(mcp.servers) ? mcp.servers : {};
+      Object.assign(result, parsed, { mcp: { ...old, ...mcp, servers: { ...oldServers, ...servers } } });
+    }
+  }
+  if (!found) return {};
+  return result;
+}
+
+/** Drop JSONC comments/trailing commas without damaging quoted URLs. */
+export function removeJsonc(source: string): string {
+  let text = "";
+  let quoted = false;
+  let escaped = false;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i]!, n = source[i + 1];
+    if (quoted) {
+      text += c;
+      if (escaped) escaped = false;
+      else if (c === "\\\\") escaped = true;
+      else if (c === '"') quoted = false;
+    } else if (c === '"') {
+      quoted = true; text += c;
+    } else if (c === "/" && n === "/") {
+      while (i < source.length && source[i] !== "\\n") i++;
+      text += "\\n";
+    } else if (c === "/" && n === "*") {
+      i += 2;
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
+        if (source[i] === "\\n") text += "\\n";
+        i++;
+      }
+      i++;
+    } else text += c;
+  }
+  return text.replace(/,\\s*([}\\]])/g, "$1");
 }
 
 function statePath(key: string): string {
